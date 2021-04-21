@@ -1,99 +1,18 @@
-from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 import torch.nn as nn
-import torchvision
+import torch
+
+from cida.util import (
+    ensure_tensor,
+    ensure_numpy,
+    init_weights,
+    set_requires_grad,
+    convert_Avec_to_A,
+    neg_guassian_likelihood,
+)
 
 from collections import Counter
-import numpy as np
-import torch
 import tqdm
-import os
-
-
-class RotateMNIST(Dataset):
-    def __init__(self, data_dir, rotate_range=(0, 360), train_range=(0, 45)):
-        self.data, self.targets = torch.load(data_dir)
-        self.rotate_range = rotate_range
-        self.train_range = train_range
-
-    def __getitem__(self, index):
-        from torchvision.transforms.functional import rotate
-        from PIL import Image
-
-        img, target = self.data[index], int(self.targets[index])
-        img = Image.fromarray(img.numpy(), mode="L")
-
-        rot_min, rot_max = self.rotate_range
-        angle = np.random.rand() * (rot_max - rot_min) + rot_min
-
-        img = torchvision.transforms.functional.rotate(img, angle)
-        img = torchvision.transforms.ToTensor()(img).to(torch.float)
-
-        train_min, train_max = self.train_range
-        is_train = angle >= train_min and angle <= train_max
-
-        return img, target, np.array([angle / 360.0], dtype=np.float32), is_train
-
-    def __len__(self):
-        return len(self.data)
-
-    @staticmethod
-    def domains_to_labels(domain):
-        return np.array(["{}-{}°".format(int(angle[0] * 8) * 45, int(angle[0] * 8 + 1) * 45) for angle in domain])
-
-
-def ensure_tensor(x, device):
-    if isinstance(x, np.ndarray):
-        x = torch.from_numpy(x).to(device)
-    else:
-        x = x.to(device)
-    return x
-
-
-def ensure_numpy(x):
-    return x.detach().cpu().numpy()
-
-
-def init_weights(net):
-    for m in net.modules():
-        if isinstance(m, nn.Linear):
-            nn.init.normal_(m.weight, mean=0, std=0.01)
-            nn.init.constant_(m.bias, val=0)
-
-
-def set_requires_grad(nets, requires_grad):
-    if not isinstance(nets, list):
-        nets = [nets]
-    for net in nets:
-        if net is not None:
-            for param in net.parameters():
-                param.requires_grad = requires_grad
-
-
-def convert_Avec_to_A(A_vec):
-    if A_vec.dim() < 2:
-        A_vec = A_vec.unsqueeze(dim=0)
-
-    if A_vec.shape[1] == 10:
-        A_dim = 4
-    elif A_vec.shape[1] == 3:
-        A_dim = 2
-    else:
-        raise ValueError("Arbitrary A_vec not yet implemented")
-
-    idx = torch.triu_indices(A_dim, A_dim)
-    A = A_vec.new_zeros((A_vec.shape[0], A_dim, A_dim))
-    A[:, idx[0], idx[1]] = A_vec
-    A[:, idx[1], idx[0]] = A_vec
-    return A.squeeze()
-
-
-def neg_guassian_likelihood(d, u):
-    """-N(u; mu, var)"""
-    B, dim = u.shape
-    assert d.shape[1] == dim * 2
-    mu, logvar = d[:, :dim], d[:, dim:]
-    return 0.5 * (((u - mu) ** 2) / torch.exp(logvar) + logvar).mean()
 
 
 class Squeeze(nn.Module):
@@ -346,28 +265,3 @@ class ConvPCIDAClassifier(nn.Module):
                 torch.save(self.state_dict(), self.save_fn)
         self.load_state_dict(torch.load(self.save_fn))
         self.eval()
-
-
-if __name__ == "__main__":
-    # RotateMNIST.download()
-    dataset = RotateMNIST(
-        os.path.join("data", "MNIST", "processed", "training.pt"), rotate_range=(0, 360), train_range=(0, 45)
-    )
-    dataloader = DataLoader(
-        dataset=dataset,
-        shuffle=True,
-        batch_size=100,
-        num_workers=1,
-    )
-    val_dataloader = DataLoader(
-        dataset=dataset,
-        shuffle=True,
-        batch_size=100,
-        num_workers=1,
-    )
-    model = ConvPCIDAClassifier(
-        classes=10, input_size=28 * 28, domain_dims=1, domains_to_labels=RotateMNIST.domains_to_labels, verbose=True
-    )
-    model = model.to("cpu")
-    model.fit(dataloader, val_dataloader, epochs=100)
-    print(model.predict(next(iter(val_dataloader))))

@@ -5,7 +5,7 @@ import torch
 import numpy as np
 
 
-class RotateMNIST(Dataset):
+class RotatedMNIST(Dataset):
     def __init__(self, data_dir, rotate_range=(0, 360), train_range=(0, 45)):
         self.data, self.targets = torch.load(data_dir)
         self.rotate_range = rotate_range
