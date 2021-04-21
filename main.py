@@ -2,6 +2,8 @@ from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 import torch.nn as nn
 import torchvision
+
+from collections import Counter
 import numpy as np
 import torch
 import tqdm
@@ -34,6 +36,10 @@ class RotateMNIST(Dataset):
 
     def __len__(self):
         return len(self.data)
+
+    @staticmethod
+    def domains_to_labels(domain):
+        return np.array(["{}-{}°".format(int(angle[0] * 8) * 45, int(angle[0] * 8 + 1) * 45) for angle in domain])
 
 
 def ensure_tensor(x, device):
@@ -99,15 +105,7 @@ class Squeeze(nn.Module):
 
 
 class EncoderSTN(nn.Module):
-    def __init__(
-        self,
-        *,
-        domain_dims,
-        input_size,
-        hidden_size,
-        latent_size,
-        dropout,
-    ):
+    def __init__(self, *, domain_dims, input_size, hidden_size, latent_size, dropout, classes):
         super(EncoderSTN, self).__init__()
 
         self.fc_stn = nn.Sequential(
@@ -146,7 +144,7 @@ class EncoderSTN(nn.Module):
             nn.BatchNorm2d(hidden_size),
             nn.ReLU(True),
             Squeeze(),
-            nn.Linear(hidden_size, 10),
+            nn.Linear(hidden_size, classes),
         )
 
         self.input_size = input_size
@@ -193,7 +191,7 @@ class DiscriminatorConv(nn.Module):
         return self.net(x)
 
 
-class PCIDA(nn.Module):
+class ConvPCIDAClassifier(nn.Module):
     def __init__(
         self,
         lr=2e-4,
@@ -207,8 +205,12 @@ class PCIDA(nn.Module):
         discriminator_hidden_size=512,
         latent_size=100,
         input_size=784,
+        classes=10,
+        domains_to_labels=None,
+        verbose=False,
+        save_fn="cida-best-acc.pth",
     ):
-        super(PCIDA, self).__init__()
+        super(ConvPCIDAClassifier, self).__init__()
 
         self.net_encoder = EncoderSTN(
             domain_dims=domain_dims,
@@ -216,6 +218,7 @@ class PCIDA(nn.Module):
             hidden_size=encoder_hidden_size,
             latent_size=latent_size,
             dropout=dropout,
+            classes=classes,
         )
         self.optimizer_generator = torch.optim.Adam(
             self.net_encoder.parameters(), lr=lr, betas=(beta1, 0.999), weight_decay=weight_decay
@@ -235,6 +238,9 @@ class PCIDA(nn.Module):
         self.lr_schedulers = [self.lr_sch_generator, self.lr_sch_discriminator]
         self.device = None
         self.lambda_gan = lambda_gan
+        self.domains_to_labels = domains_to_labels
+        self.verbose = verbose
+        self.save_fn = save_fn
 
         init_weights(self.net_encoder)
 
@@ -251,10 +257,10 @@ class PCIDA(nn.Module):
         loss_discriminator.backward()
 
     def backward_generator(self, encoded, y_pred, domain, y, is_train):
-        d = self.net_discriminator(encoded)
+        domain_pred = self.net_discriminator(encoded)
 
-        E_gan_src = neg_guassian_likelihood(d[is_train], domain[is_train])
-        E_gan_tgt = neg_guassian_likelihood(d[~is_train], domain[~is_train])
+        E_gan_src = neg_guassian_likelihood(domain_pred[is_train], domain[is_train])
+        E_gan_tgt = neg_guassian_likelihood(domain_pred[~is_train], domain[~is_train])
 
         loss_E_gan = -(E_gan_src + E_gan_tgt) / 2
         loss_E_pred = F.nll_loss(y_pred[is_train], y[is_train])
@@ -263,7 +269,7 @@ class PCIDA(nn.Module):
         loss_encoder.backward()
 
     def _fit_batch(self, x, y, domain, is_train):
-        y_pred, encoded, pred_labels = self.forward(x, domain)
+        y_pred, encoded, _ = self.forward(x, domain)
 
         set_requires_grad(self.net_discriminator, True)
         self.optimizer_discriminator.zero_grad()
@@ -277,36 +283,68 @@ class PCIDA(nn.Module):
 
     def _fit_epoch(self, dataloader):
         self.train()
-        for batch in tqdm.tqdm(dataloader):
+        if self.verbose:
+            dataloader = tqdm.tqdm(dataloader)
+        for batch in dataloader:
             x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
             self._fit_batch(x, y, domain, is_train)
+
+    def predict(self, batch):
+        x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
+        _, _, pred_labels = self.forward(x, domain)
+        return ensure_numpy(pred_labels)
 
     def _eval(self, test_dataloader):
         self.eval()
         test_cnt, train_cnt = 0, 0
         test_correct, train_correct = 0, 0
+        by_domain_label_cnt, by_domain_label_correct = Counter(), Counter()
+
         for batch in test_dataloader:
+
             x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
             y_pred, encoded, pred_labels = self.forward(x, domain)
+
+            domain = ensure_numpy(domain)
             is_train = ensure_numpy(is_train)
             y = ensure_numpy(y)
             pred_labels = ensure_numpy(pred_labels)
-            correct = (y == pred_labels).astype(np.float32)
+            correct = (y == pred_labels).astype(np.int32)
+
             train_cnt += is_train.sum()
             test_cnt += (~is_train).sum()
             train_correct += correct[is_train].sum()
             test_correct += correct[~is_train].sum()
+
+            if self.domains_to_labels is not None:
+                domain_labels = self.domains_to_labels(domain)
+                by_domain_label_cnt.update(domain_labels)
+                by_domain_label_correct.update(domain_labels[correct == 1])
+
         train_acc = train_correct / train_cnt
         test_acc = test_correct / test_cnt
-        return train_acc, test_acc
+        by_domain_acc = {
+            domain_label: by_domain_label_correct[domain_label] / cnt
+            for domain_label, cnt in by_domain_label_cnt.items()
+        }
+        return train_acc, test_acc, by_domain_acc
 
     def fit(self, dataloader, val_dataloader, epochs=100):
         self.device = next(self.parameters()).device
+        best_acc = 0
         for epoch in range(epochs):
-            print("Epoch = 1")
+            if self.verbose:
+                print("Epoch {}/{}".format(epoch + 1, epochs))
             self._fit_epoch(dataloader)
-            train_acc, test_acc = self._eval(val_dataloader)
-            print(round(train_acc, 3), round(test_acc, 3))
+            train_acc, test_acc, by_domain_acc = self._eval(val_dataloader)
+            if self.verbose:
+                print("train_acc: {:.3f} - test_acc: {:.3f}".format(train_acc, test_acc))
+                print("domain_acc:", {d: round(acc, 3) for d, acc in by_domain_acc.items()})
+                print()
+            if test_acc > best_acc:
+                best_acc = test_acc
+                torch.save(self.state_dict(), self.save_fn)
+        self.load_state_dict(torch.load(self.save_fn))
         self.eval()
 
 
@@ -326,5 +364,9 @@ if __name__ == "__main__":
         batch_size=100,
         num_workers=1,
     )
-    model = PCIDA().to("cpu")
-    model.fit(dataloader, val_dataloader, epochs=100)
+    model = ConvPCIDAClassifier(
+        classes=10, input_size=28 * 28, domain_dims=1, domains_to_labels=RotateMNIST.domains_to_labels, verbose=True
+    )
+    model = model.to("cpu")
+    model.fit(dataloader, val_dataloader, epochs=1)
+    print(model.predict(next(iter(val_dataloader))))
