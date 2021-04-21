@@ -16,6 +16,14 @@ import numpy as np
 import tqdm
 
 
+def corrcoef(target, pred):
+    pred_n = pred - pred.mean()
+    target_n = target - target.mean()
+    pred_n = pred_n / pred_n.norm()
+    target_n = target_n / target_n.norm()
+    return (pred_n * target_n).sum()
+
+
 class Encoder(nn.Module):
     def __init__(self, *, domain_dims, input_size, hidden_size, latent_size, dropout):
         super(Encoder, self).__init__()
@@ -73,13 +81,13 @@ class Discriminator(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(latent_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(0.2),
             nn.Linear(hidden_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(0.2),
             nn.Linear(hidden_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(0.2),
             nn.Linear(hidden_size, domain_dims * 2),
         )
 
@@ -164,7 +172,8 @@ class PCIDARegressor(nn.Module):
         E_gan_tgt = neg_guassian_likelihood(domain_pred[~is_train], domain[~is_train])
 
         loss_E_gan = -(E_gan_src + E_gan_tgt) / 2
-        loss_E_pred = F.mse_loss(y_pred[is_train], y[is_train])
+        # loss_E_pred = F.mse_loss(y_pred[is_train], y[is_train])
+        loss_E_pred = -corrcoef(y[is_train], y_pred[is_train])
 
         loss_encoder = loss_E_gan * self.lambda_gan + loss_E_pred
         loss_encoder.backward()
@@ -189,6 +198,8 @@ class PCIDARegressor(nn.Module):
         for batch in dataloader:
             x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
             self._fit_batch(x, y.float(), domain, is_train)
+        for lr_scheduler in self.lr_schedulers:
+            lr_scheduler.step()
 
     def predict(self, batch):
         x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
@@ -238,6 +249,23 @@ class PCIDARegressor(nn.Module):
             self._fit_epoch(dataloader)
             metrics = self._eval(val_dataloader)
             if self.verbose:
-                print("metrics:", {k: round(m_val, 6) for k, m_val in metrics.items()})
+                print(
+                    " - ".join(
+                        [
+                            "{}: {:.6f}".format(k, m_val)
+                            for k, m_val in metrics.items()
+                            if k.startswith("train_") or k.startswith("test_")
+                        ]
+                    )
+                )
+                for metric_name in self.metrics.keys():
+                    print(
+                        metric_name + ":",
+                        {
+                            k.replace("_" + metric_name, ""): round(m_val, 3)
+                            for k, m_val in metrics.items()
+                            if k.endswith("_" + metric_name) and not (k.startswith("train_") or k.startswith("test_"))
+                        },
+                    )
                 print()
         self.eval()

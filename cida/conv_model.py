@@ -207,6 +207,8 @@ class ConvPCIDAClassifier(nn.Module):
         for batch in dataloader:
             x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
             self._fit_batch(x, y, domain, is_train)
+        for lr_scheduler in self.lr_schedulers:
+            lr_scheduler.step()
 
     def predict(self, batch):
         x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
