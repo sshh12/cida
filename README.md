@@ -17,7 +17,7 @@ $ pip install git+https://github.com/sshh12/cida.git --upgrade
 ```python
 from torch.utils.data import DataLoader
 from cida.datasets import RotatedMNIST
-from cida.model import ConvPCIDAClassifier
+from cida.conv_model import ConvPCIDAClassifier
 import os
 
 if __name__ == "__main__":
