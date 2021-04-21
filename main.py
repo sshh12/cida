@@ -164,10 +164,10 @@ class EncoderSTN(nn.Module):
         return x
 
     def forward(self, x, domain):
-        x = self.spatial_transformation(x, domain)
-        z = self.conv(x)
-        y = self.fc_pred(z)
-        return F.log_softmax(y, dim=1), x, z
+        transformed = self.spatial_transformation(x, domain)
+        conv_feats = self.conv(transformed)
+        y = self.fc_pred(conv_feats)
+        return F.log_softmax(y, dim=1), transformed, conv_feats
 
 
 class DiscriminatorConv(nn.Module):
@@ -349,6 +349,7 @@ class ConvPCIDAClassifier(nn.Module):
 
 
 if __name__ == "__main__":
+    # RotateMNIST.download()
     dataset = RotateMNIST(
         os.path.join("data", "MNIST", "processed", "training.pt"), rotate_range=(0, 360), train_range=(0, 45)
     )
@@ -368,5 +369,5 @@ if __name__ == "__main__":
         classes=10, input_size=28 * 28, domain_dims=1, domains_to_labels=RotateMNIST.domains_to_labels, verbose=True
     )
     model = model.to("cpu")
-    model.fit(dataloader, val_dataloader, epochs=1)
+    model.fit(dataloader, val_dataloader, epochs=100)
     print(model.predict(next(iter(val_dataloader))))
