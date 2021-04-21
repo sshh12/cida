@@ -2,7 +2,7 @@
 
 An unofficial refactor of the code used by the ICML 2020 paper [Continuously Indexed Domain Adaptation](http://wanghao.in/paper/ICML20_CIDA.pdf).
 
-- [Offical Code](https://github.com/hehaodele/CIDA)
+- [Official Code](https://github.com/hehaodele/CIDA)
 
 ## Install
 
