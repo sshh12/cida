@@ -17,11 +17,11 @@ import tqdm
 
 
 class Encoder(nn.Module):
-    def __init__(self, *, domain_dims, input_size, hidden_size, latent_size, dropout):
+    def __init__(self, *, domain_dims, input_size, hidden_size, latent_size, dropout, encode_domain):
         super(Encoder, self).__init__()
 
         self.fc_inp = nn.Sequential(
-            nn.Linear(domain_dims + input_size, hidden_size),
+            nn.Linear(domain_dims + input_size if encode_domain else input_size, hidden_size),
             nn.LeakyReLU(0.2),
             nn.Dropout(dropout),
             nn.Linear(hidden_size, hidden_size),
@@ -59,9 +59,13 @@ class Encoder(nn.Module):
         )
 
         self.input_size = input_size
+        self.encode_domain = encode_domain
 
     def forward(self, x, domain):
-        input_ = self.fc_inp(torch.cat([domain, x], 1))
+        if self.encode_domain:
+            input_ = self.fc_inp(torch.cat([domain, x], 1))
+        else:
+            input_ = self.fc_inp(x)
         enc = self.fc_feats(input_)
         y = self.fc_pred(enc)
         return y, enc
@@ -101,6 +105,7 @@ class PCIDARegressor(nn.Module):
         discriminator_hidden_size=512,
         latent_size=100,
         input_size=100,
+        test_domain_known=True,
         loss=F.mse_loss,
         domains_to_labels=None,
         verbose=False,
@@ -119,6 +124,7 @@ class PCIDARegressor(nn.Module):
             hidden_size=encoder_hidden_size,
             latent_size=latent_size,
             dropout=dropout,
+            encode_domain=test_domain_known,
         )
         self.optimizer_generator = torch.optim.Adam(
             self.net_encoder.parameters(), lr=lr, betas=(beta1, 0.999), weight_decay=weight_decay
@@ -148,7 +154,7 @@ class PCIDARegressor(nn.Module):
         init_weights(self.net_encoder)
 
     def forward(self, x, domain):
-        y_pred, encoded = self.net_encoder(x, domain)
+        y_pred, encoded = self.net_encoder(x.float(), domain.float())
         y_pred = torch.squeeze(y_pred)
         return y_pred, encoded
 
@@ -159,7 +165,7 @@ class PCIDARegressor(nn.Module):
         loss_discriminator = (D_src + D_tgt) / 2
         loss_discriminator.backward()
 
-    def backward_generator(self, encoded, y_pred, domain, y, is_train):
+    def backward_generator(self, epoch, encoded, y_pred, domain, y, is_train):
         domain_pred = self.net_discriminator(encoded)
 
         E_gan_src = neg_guassian_likelihood(domain_pred[is_train], domain[is_train])
@@ -168,10 +174,15 @@ class PCIDARegressor(nn.Module):
         loss_E_gan = -(E_gan_src + E_gan_tgt) / 2
         loss_E_pred = self.loss(y[is_train], y_pred[is_train])
 
-        loss_encoder = loss_E_gan * self.lambda_gan + loss_E_pred
+        if hasattr(self.lambda_gan, "__call__"):
+            lambda_gan = self.lambda_gan(epoch)
+        else:
+            lambda_gan = self.lambda_gan
+
+        loss_encoder = loss_E_gan * lambda_gan + loss_E_pred
         loss_encoder.backward()
 
-    def _fit_batch(self, x, y, domain, is_train):
+    def _fit_batch(self, epoch, x, y, domain, is_train):
         y_pred, encoded = self.forward(x, domain)
 
         set_requires_grad(self.net_discriminator, True)
@@ -181,16 +192,16 @@ class PCIDARegressor(nn.Module):
 
         set_requires_grad(self.net_discriminator, False)
         self.optimizer_generator.zero_grad()
-        self.backward_generator(encoded, y_pred, domain, y, is_train)
+        self.backward_generator(epoch, encoded, y_pred, domain, y, is_train)
         self.optimizer_generator.step()
 
-    def _fit_epoch(self, dataloader):
+    def _fit_epoch(self, epoch, dataloader):
         self.train()
         if self.verbose:
             dataloader = tqdm.tqdm(dataloader)
         for batch in dataloader:
             x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
-            self._fit_batch(x, y.float(), domain, is_train)
+            self._fit_batch(epoch, x.float(), y.float(), domain.float(), is_train)
         for lr_scheduler in self.lr_schedulers:
             lr_scheduler.step()
 
@@ -240,7 +251,7 @@ class PCIDARegressor(nn.Module):
         for epoch in range(epochs):
             if self.verbose:
                 print("Epoch {}/{}".format(epoch + 1, epochs))
-            self._fit_epoch(dataloader)
+            self._fit_epoch(epoch, dataloader)
             metrics = self._eval(val_dataloader)
             if metrics[self.save_metric] > best_score:
                 best_score = metrics[self.save_metric]
