@@ -16,14 +16,6 @@ import numpy as np
 import tqdm
 
 
-def corrcoef(target, pred):
-    pred_n = pred - pred.mean()
-    target_n = target - target.mean()
-    pred_n = pred_n / pred_n.norm()
-    target_n = target_n / target_n.norm()
-    return (pred_n * target_n).sum()
-
-
 class Encoder(nn.Module):
     def __init__(self, *, domain_dims, input_size, hidden_size, latent_size, dropout):
         super(Encoder, self).__init__()
@@ -69,7 +61,7 @@ class Encoder(nn.Module):
         self.input_size = input_size
 
     def forward(self, x, domain):
-        input_ = self.fc_inp(torch.cat([domain, x.reshape(-1, self.input_size)], 1))
+        input_ = self.fc_inp(torch.cat([domain, x], 1))
         enc = self.fc_feats(input_)
         y = self.fc_pred(enc)
         return y, enc
@@ -109,11 +101,12 @@ class PCIDARegressor(nn.Module):
         discriminator_hidden_size=512,
         latent_size=100,
         input_size=100,
+        loss=F.mse_loss,
         domains_to_labels=None,
         verbose=False,
         metrics={},
         save_metric="test_mse",
-        save_fn="cida-best-acc.pth",
+        save_fn="cida-best.pth",
     ):
         super(PCIDARegressor, self).__init__()
 
@@ -150,6 +143,7 @@ class PCIDARegressor(nn.Module):
         self.metrics = metrics
         self.save_fn = save_fn
         self.save_metric = save_metric
+        self.loss = loss
 
         init_weights(self.net_encoder)
 
@@ -172,8 +166,7 @@ class PCIDARegressor(nn.Module):
         E_gan_tgt = neg_guassian_likelihood(domain_pred[~is_train], domain[~is_train])
 
         loss_E_gan = -(E_gan_src + E_gan_tgt) / 2
-        # loss_E_pred = F.mse_loss(y_pred[is_train], y[is_train])
-        loss_E_pred = -corrcoef(y[is_train], y_pred[is_train])
+        loss_E_pred = self.loss(y[is_train], y_pred[is_train])
 
         loss_encoder = loss_E_gan * self.lambda_gan + loss_E_pred
         loss_encoder.backward()
@@ -243,11 +236,16 @@ class PCIDARegressor(nn.Module):
 
     def fit(self, dataloader, val_dataloader, epochs=100):
         self.device = next(self.parameters()).device
+        best_score = 0
         for epoch in range(epochs):
             if self.verbose:
                 print("Epoch {}/{}".format(epoch + 1, epochs))
             self._fit_epoch(dataloader)
             metrics = self._eval(val_dataloader)
+            if metrics[self.save_metric] > best_score:
+                best_score = metrics[self.save_metric]
+                if self.verbose:
+                    print("-> New Best!")
             if self.verbose:
                 print(
                     " - ".join(
