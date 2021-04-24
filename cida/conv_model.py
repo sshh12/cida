@@ -127,7 +127,6 @@ class ConvPCIDAClassifier(nn.Module):
         classes=10,
         domains_to_labels=None,
         verbose=False,
-        save_fn="cida-best-acc.pth",
     ):
         super(ConvPCIDAClassifier, self).__init__()
 
@@ -250,7 +249,13 @@ class ConvPCIDAClassifier(nn.Module):
         }
         return train_acc, test_acc, by_domain_acc
 
-    def fit(self, dataloader, val_dataloader, epochs=100):
+    def fit(
+        self,
+        dataloader,
+        val_dataloader,
+        epochs=100,
+        save_fn="cida-best-acc.pth",
+    ):
         self.device = next(self.parameters()).device
         best_acc = 0
         for epoch in range(epochs):
@@ -264,6 +269,12 @@ class ConvPCIDAClassifier(nn.Module):
                 print()
             if test_acc > best_acc:
                 best_acc = test_acc
-                torch.save(self.state_dict(), self.save_fn)
-        self.load_state_dict(torch.load(self.save_fn))
+                self.save(save_fn)
+        self.load(save_fn)
         self.eval()
+
+    def save(self, fn):
+        return torch.save(self.state_dict(), fn)
+
+    def load(self, fn):
+        self.load_state_dict(torch.load(fn))

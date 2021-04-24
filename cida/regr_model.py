@@ -110,8 +110,6 @@ class PCIDARegressor(nn.Module):
         domains_to_labels=None,
         verbose=False,
         metrics={},
-        save_metric="test_mse",
-        save_fn="cida-best.pth",
     ):
         super(PCIDARegressor, self).__init__()
 
@@ -147,8 +145,6 @@ class PCIDARegressor(nn.Module):
         self.domains_to_labels = domains_to_labels
         self.verbose = verbose
         self.metrics = metrics
-        self.save_fn = save_fn
-        self.save_metric = save_metric
         self.loss = loss
 
         init_weights(self.net_encoder)
@@ -210,7 +206,7 @@ class PCIDARegressor(nn.Module):
         y_pred, _ = self.forward(x, domain)
         return ensure_numpy(y_pred)
 
-    def _eval(self, test_dataloader):
+    def eval_on_data(self, test_dataloader):
         self.eval()
 
         domains = []
@@ -245,16 +241,26 @@ class PCIDARegressor(nn.Module):
 
         return metric_vals
 
-    def fit(self, dataloader, val_dataloader, epochs=100):
+    def fit(
+        self,
+        dataloader,
+        val_dataloader,
+        epochs=100,
+        save_metric="test_mse",
+        save_fn="cida-best.pth",
+    ):
         self.device = next(self.parameters()).device
-        best_score = 0
+        metric_hist = []
+        best_score = None
         for epoch in range(epochs):
             if self.verbose:
                 print("Epoch {}/{}".format(epoch + 1, epochs))
             self._fit_epoch(epoch, dataloader)
-            metrics = self._eval(val_dataloader)
-            if metrics[self.save_metric] > best_score:
-                best_score = metrics[self.save_metric]
+            metrics = self.eval_on_data(val_dataloader)
+            metric_hist.append(metrics)
+            if best_score is None or metrics[save_metric] > best_score:
+                best_score = metrics[save_metric]
+                self.save(save_fn)
                 if self.verbose:
                     print("-> New Best!")
             if self.verbose:
@@ -278,3 +284,11 @@ class PCIDARegressor(nn.Module):
                     )
                 print()
         self.eval()
+
+        return metric_hist
+
+    def save(self, fn):
+        return torch.save(self.state_dict(), fn)
+
+    def load(self, fn):
+        self.load_state_dict(torch.load(fn))
