@@ -134,3 +134,4 @@ data/
 _temp*.py
 experiments.bat
 out.txt
+*.npy

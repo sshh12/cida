@@ -229,11 +229,12 @@ class PCIDARegressor(nn.Module):
         is_trains = np.hstack(is_trains)
         y_preds = np.hstack(y_preds)
         ys = np.hstack(ys)
+        is_nan = np.isnan(ys)
 
         metric_vals = {}
         for metric_name, metric_func in self.metrics.items():
             metric_vals["train_" + metric_name] = metric_func(y_preds[is_trains], ys[is_trains])
-            metric_vals["test_" + metric_name] = metric_func(y_preds[~is_trains], ys[~is_trains])
+            metric_vals["test_" + metric_name] = metric_func(y_preds[~is_trains & ~is_nan], ys[~is_trains & ~is_nan])
             for domain_label in sorted(np.unique(domain_labels)):
                 metric_vals[domain_label + "_" + metric_name] = metric_func(
                     y_preds[domain_labels == domain_label], ys[domain_labels == domain_label]
@@ -258,7 +259,9 @@ class PCIDARegressor(nn.Module):
             self._fit_epoch(epoch, dataloader)
             metrics = self.eval_on_data(val_dataloader)
             metric_hist.append(metrics)
-            if best_score is None or metrics[save_metric] > best_score:
+            if save_metric is None:
+                self.save(save_fn)
+            elif best_score is None or metrics[save_metric] > best_score:
                 best_score = metrics[save_metric]
                 self.save(save_fn)
                 if self.verbose:
