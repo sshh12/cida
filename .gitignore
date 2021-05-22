@@ -131,8 +131,9 @@ dmypy.json
 # This
 data/
 *.pth
-_temp*.py
-experiments.bat
-out.txt
+*.bat
+*.txt
 *.npy
+*.out
+_temp*.py
 train_*.py

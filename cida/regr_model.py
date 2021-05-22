@@ -17,7 +17,7 @@ import tqdm
 
 
 class Encoder(nn.Module):
-    def __init__(self, *, domain_dims, input_size, hidden_size, latent_size, dropout, encode_domain):
+    def __init__(self, *, domain_dims, output_dims, input_size, hidden_size, latent_size, dropout, encode_domain):
         super(Encoder, self).__init__()
 
         self.fc_inp = nn.Sequential(
@@ -55,7 +55,7 @@ class Encoder(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
             nn.ReLU(True),
-            nn.Linear(hidden_size, 1),
+            nn.Linear(hidden_size, output_dims),
         )
 
         self.input_size = input_size
@@ -101,6 +101,7 @@ class PCIDARegressor(nn.Module):
         dropout=0.2,
         lambda_gan=2.0,
         domain_dims=1,
+        output_dims=1,
         encoder_hidden_size=256,
         discriminator_hidden_size=512,
         latent_size=100,
@@ -118,6 +119,7 @@ class PCIDARegressor(nn.Module):
 
         self.net_encoder = Encoder(
             domain_dims=domain_dims,
+            output_dims=output_dims,
             input_size=input_size,
             hidden_size=encoder_hidden_size,
             latent_size=latent_size,
@@ -146,12 +148,14 @@ class PCIDARegressor(nn.Module):
         self.verbose = verbose
         self.metrics = metrics
         self.loss = loss
+        self.output_dims = output_dims
 
         init_weights(self.net_encoder)
 
     def forward(self, x, domain):
         y_pred, encoded = self.net_encoder(x.float(), domain.float())
-        y_pred = torch.squeeze(y_pred)
+        if self.output_dims == 1:
+            y_pred = torch.squeeze(y_pred)
         return y_pred, encoded
 
     def backward_discriminator(self, encoded, domain, is_train):
@@ -217,7 +221,7 @@ class PCIDARegressor(nn.Module):
         for batch in test_dataloader:
 
             x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
-            y_pred, encoded = self.forward(x, domain)
+            y_pred, _ = self.forward(x, domain)
 
             domains.append(ensure_numpy(domain))
             is_trains.append(ensure_numpy(is_train))
@@ -227,9 +231,14 @@ class PCIDARegressor(nn.Module):
         domains = np.vstack(domains)
         domain_labels = self.domains_to_labels(domains)
         is_trains = np.hstack(is_trains)
-        y_preds = np.hstack(y_preds)
-        ys = np.hstack(ys)
-        is_nan = np.isnan(ys)
+        if self.output_dims == 1:
+            y_preds = np.hstack(y_preds)
+            ys = np.hstack(ys)
+            is_nan = np.isnan(ys)
+        else:
+            y_preds = np.vstack(y_preds)
+            ys = np.vstack(ys)
+            is_nan = np.isnan(ys)[:, 0]
 
         metric_vals = {}
         for metric_name, metric_func in self.metrics.items():
