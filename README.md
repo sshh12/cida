@@ -40,7 +40,7 @@ if __name__ == "__main__":
         num_workers=1,
     )
     model = ConvPCIDAClassifier(
-        classes=10, input_size=28 * 28, domain_dims=1, domains_to_labels=RotatedMNIST.domains_to_labels, verbose=True
+        classes=10, input_dims=28 * 28, domain_dims=1, domains_to_labels=RotatedMNIST.domains_to_labels, verbose=True
     )
     model = model.to("cpu")
     model.fit(dataloader, val_dataloader, epochs=100)
@@ -72,7 +72,7 @@ if __name__ == "__main__":
         num_workers=1,
     )
     model = PCIDARegressor(
-        input_size=1000,
+        input_dims=1000,
         domain_dims=1,
         domains_to_labels=dataset.domains_to_labels,
         lr=3e-4,
@@ -81,8 +81,8 @@ if __name__ == "__main__":
         weight_decay=5e-4,
         dropout=0.5,
         lambda_gan=lambda epoch: 3.0,
-        encoder_hidden_size=128,
-        discriminator_hidden_size=128,
+        encoder_hidden_dims=128,
+        discriminator_hidden_dims=128,
         latent_size=64,
         test_domain_known=True,
         metrics={"mse": mse},

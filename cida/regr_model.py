@@ -7,31 +7,25 @@ from cida.util import (
     ensure_numpy,
     init_weights,
     set_requires_grad,
-    convert_Avec_to_A,
     neg_guassian_likelihood,
 )
 
-from collections import Counter
 import numpy as np
 import tqdm
 
 
 class Encoder(nn.Module):
-    def __init__(self, *, domain_dims, output_dims, input_size, hidden_size, latent_size, dropout, encode_domain):
+    def __init__(self, *, domain_dims, output_dims, input_dims, hidden_size, latent_size, dropout, encode_domain):
         super(Encoder, self).__init__()
 
-        self.fc_inp = nn.Sequential(
-            nn.Linear(domain_dims + input_size if encode_domain else input_size, hidden_size),
+        self.fc_feats = nn.Sequential(
+            nn.Linear(domain_dims + input_dims if encode_domain else input_dims, hidden_size),
             nn.LeakyReLU(0.2),
             nn.Dropout(dropout),
             nn.Linear(hidden_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
             nn.LeakyReLU(0.2),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, hidden_size),
-        )
-
-        self.fc_feats = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
             nn.ReLU(True),
@@ -58,14 +52,14 @@ class Encoder(nn.Module):
             nn.Linear(hidden_size, output_dims),
         )
 
-        self.input_size = input_size
+        self.input_dims = input_dims
         self.encode_domain = encode_domain
 
     def forward(self, x, domain):
         if self.encode_domain:
-            input_ = self.fc_inp(torch.cat([domain, x], 1))
+            input_ = torch.cat([domain, x], 1)
         else:
-            input_ = self.fc_inp(x)
+            input_ = x
         enc = self.fc_feats(input_)
         y = self.fc_pred(enc)
         return y, enc
@@ -102,10 +96,10 @@ class PCIDARegressor(nn.Module):
         lambda_gan=2.0,
         domain_dims=1,
         output_dims=1,
-        encoder_hidden_size=256,
-        discriminator_hidden_size=512,
+        encoder_hidden_dims=256,
+        discriminator_hidden_dims=512,
         latent_size=100,
-        input_size=100,
+        input_dims=100,
         test_domain_known=True,
         loss=F.mse_loss,
         domains_to_labels=None,
@@ -120,8 +114,8 @@ class PCIDARegressor(nn.Module):
         self.net_encoder = Encoder(
             domain_dims=domain_dims,
             output_dims=output_dims,
-            input_size=input_size,
-            hidden_size=encoder_hidden_size,
+            input_dims=input_dims,
+            hidden_size=encoder_hidden_dims,
             latent_size=latent_size,
             dropout=dropout,
             encode_domain=test_domain_known,
@@ -132,7 +126,7 @@ class PCIDARegressor(nn.Module):
         self.lr_sch_generator = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_generator, gamma=gamma)
 
         self.net_discriminator = Discriminator(
-            hidden_size=discriminator_hidden_size, latent_size=latent_size, domain_dims=domain_dims
+            hidden_size=discriminator_hidden_dims, latent_size=latent_size, domain_dims=domain_dims
         )
         self.optimizer_discriminator = torch.optim.Adam(
             self.net_discriminator.parameters(), lr=lr, betas=(beta1, 0.999), weight_decay=weight_decay

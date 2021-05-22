@@ -24,11 +24,11 @@ class Squeeze(nn.Module):
 
 
 class EncoderSTN(nn.Module):
-    def __init__(self, *, domain_dims, input_size, hidden_size, latent_size, dropout, classes):
+    def __init__(self, *, domain_dims, input_dims, hidden_size, latent_size, dropout, classes):
         super(EncoderSTN, self).__init__()
 
         self.fc_stn = nn.Sequential(
-            nn.Linear(domain_dims + input_size, hidden_size),
+            nn.Linear(domain_dims + input_dims, hidden_size),
             nn.LeakyReLU(0.2),
             nn.Dropout(dropout),
             nn.Linear(hidden_size, hidden_size),
@@ -66,10 +66,10 @@ class EncoderSTN(nn.Module):
             nn.Linear(hidden_size, classes),
         )
 
-        self.input_size = input_size
+        self.input_dims = input_dims
 
     def spatial_transformation(self, x, domain):
-        A_vec = self.fc_stn(torch.cat([domain, x.reshape(-1, self.input_size)], 1))
+        A_vec = self.fc_stn(torch.cat([domain, x.reshape(-1, self.input_dims)], 1))
         A = convert_Avec_to_A(A_vec)
         _, evs = torch.symeig(A, eigenvectors=True)
         tcos, tsin = evs[:, 0:1, 0:1], evs[:, 1:2, 0:1]
@@ -120,10 +120,10 @@ class ConvPCIDAClassifier(nn.Module):
         dropout=0.2,
         lambda_gan=2.0,
         domain_dims=1,
-        encoder_hidden_size=256,
-        discriminator_hidden_size=512,
+        encoder_hidden_dims=256,
+        discriminator_hidden_dims=512,
         latent_size=100,
-        input_size=784,
+        input_dims=784,
         classes=10,
         domains_to_labels=None,
         verbose=False,
@@ -132,8 +132,8 @@ class ConvPCIDAClassifier(nn.Module):
 
         self.net_encoder = EncoderSTN(
             domain_dims=domain_dims,
-            input_size=input_size,
-            hidden_size=encoder_hidden_size,
+            input_dims=input_dims,
+            hidden_size=encoder_hidden_dims,
             latent_size=latent_size,
             dropout=dropout,
             classes=classes,
@@ -144,7 +144,7 @@ class ConvPCIDAClassifier(nn.Module):
         self.lr_sch_generator = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_generator, gamma=gamma)
 
         self.net_discriminator = DiscriminatorConv(
-            hidden_size=discriminator_hidden_size, latent_size=latent_size, domain_dims=domain_dims
+            hidden_size=discriminator_hidden_dims, latent_size=latent_size, domain_dims=domain_dims
         )
         self.optimizer_discriminator = torch.optim.Adam(
             self.net_discriminator.parameters(), lr=lr, betas=(beta1, 0.999), weight_decay=weight_decay
