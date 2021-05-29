@@ -94,15 +94,17 @@ class PCIDARegressor(nn.Module):
         weight_decay=5e-4,
         dropout=0.2,
         lambda_gan=2.0,
+        target_gan_weight=0.5,
         domain_dims=1,
         output_dims=1,
         encoder_hidden_dims=256,
         discriminator_hidden_dims=512,
         latent_size=100,
         input_dims=100,
-        test_domain_known=True,
         loss=F.mse_loss,
         domains_to_labels=None,
+        test_domain_known=True,
+        test_metric_gap=None,
         verbose=False,
         metrics={},
     ):
@@ -138,11 +140,13 @@ class PCIDARegressor(nn.Module):
         self.lr_schedulers = [self.lr_sch_generator, self.lr_sch_discriminator]
         self.device = None
         self.lambda_gan = lambda_gan
+        self.target_gan_weight = target_gan_weight
         self.domains_to_labels = domains_to_labels
         self.verbose = verbose
         self.metrics = metrics
         self.loss = loss
         self.output_dims = output_dims
+        self.test_metric_gap = test_metric_gap
 
         init_weights(self.net_encoder)
 
@@ -165,7 +169,7 @@ class PCIDARegressor(nn.Module):
         E_gan_src = neg_guassian_likelihood(domain_pred[is_train], domain[is_train])
         E_gan_tgt = neg_guassian_likelihood(domain_pred[~is_train], domain[~is_train])
 
-        loss_E_gan = -(E_gan_src + E_gan_tgt) / 2
+        loss_E_gan = -(E_gan_src * (1 - self.target_gan_weight) + E_gan_tgt * self.target_gan_weight)
         loss_E_pred = self.loss(y[is_train], y_pred[is_train])
 
         if hasattr(self.lambda_gan, "__call__"):
@@ -200,7 +204,7 @@ class PCIDARegressor(nn.Module):
             lr_scheduler.step()
 
     def predict(self, batch):
-        x, y, domain, is_train = [ensure_tensor(_, self.device) for _ in batch]
+        x, _, domain, _ = [ensure_tensor(_, self.device) for _ in batch]
         y_pred, _ = self.forward(x, domain)
         return ensure_numpy(y_pred)
 
@@ -234,10 +238,17 @@ class PCIDARegressor(nn.Module):
             ys = np.vstack(ys)
             is_nan = np.isnan(ys)[:, 0]
 
+        test_domains = sorted(set(domain_labels[~is_trains]))
+        if self.test_metric_gap is None:
+            test_mask = np.array([True for _ in domain_labels])
+        else:
+            test_mask = np.array([dl in test_domains[self.test_metric_gap :] for dl in domain_labels])
+        test_mask &= ~is_trains & ~is_nan
+
         metric_vals = {}
         for metric_name, metric_func in self.metrics.items():
             metric_vals["train_" + metric_name] = metric_func(y_preds[is_trains], ys[is_trains])
-            metric_vals["test_" + metric_name] = metric_func(y_preds[~is_trains & ~is_nan], ys[~is_trains & ~is_nan])
+            metric_vals["test_" + metric_name] = metric_func(y_preds[test_mask], ys[test_mask])
             for domain_label in sorted(np.unique(domain_labels)):
                 metric_vals[domain_label + "_" + metric_name] = metric_func(
                     y_preds[domain_labels == domain_label], ys[domain_labels == domain_label]
@@ -252,6 +263,7 @@ class PCIDARegressor(nn.Module):
         epochs=100,
         save_metric="test_mse",
         save_fn="cida-best.pth",
+        per_era_metrics=True,
     ):
         self.device = next(self.parameters()).device
         metric_hist = []
@@ -270,27 +282,9 @@ class PCIDARegressor(nn.Module):
                 if self.verbose:
                     print("-> New Best!")
             if self.verbose:
-                print(
-                    " - ".join(
-                        [
-                            "{}: {:.6f}".format(k, m_val)
-                            for k, m_val in metrics.items()
-                            if k.startswith("train_") or k.startswith("test_")
-                        ]
-                    )
-                )
-                for metric_name in self.metrics.keys():
-                    print(
-                        metric_name + ":",
-                        {
-                            k.replace("_" + metric_name, ""): round(m_val, 3)
-                            for k, m_val in metrics.items()
-                            if k.endswith("_" + metric_name) and not (k.startswith("train_") or k.startswith("test_"))
-                        },
-                    )
-                print()
-        self.eval()
+                _print_metrics(self.metrics, metrics, per_era_metrics)
 
+        self.eval()
         return metric_hist
 
     def save(self, fn):
@@ -298,3 +292,26 @@ class PCIDARegressor(nn.Module):
 
     def load(self, fn):
         self.load_state_dict(torch.load(fn))
+
+
+def _print_metrics(metric_types, metric_values, per_era_metrics):
+    print(
+        " - ".join(
+            [
+                "{}: {:.6f}".format(k, m_val)
+                for k, m_val in metric_values.items()
+                if k.startswith("train_") or k.startswith("test_")
+            ]
+        )
+    )
+    if per_era_metrics:
+        for metric_name in metric_types.keys():
+            print(
+                metric_name + ":",
+                {
+                    k.replace("_" + metric_name, ""): round(m_val, 3)
+                    for k, m_val in metric_values.items()
+                    if k.endswith("_" + metric_name) and not (k.startswith("train_") or k.startswith("test_"))
+                },
+            )
+    print()
