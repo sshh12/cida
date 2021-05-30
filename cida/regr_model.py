@@ -208,6 +208,11 @@ class PCIDARegressor(nn.Module):
         y_pred, _ = self.forward(x, domain)
         return ensure_numpy(y_pred)
 
+    def predict_embedding(self, batch):
+        x, _, domain, _ = [ensure_tensor(_, self.device) for _ in batch]
+        _, enc = self.forward(x, domain)
+        return ensure_numpy(enc)
+
     def eval_on_data(self, test_dataloader):
         self.eval()
 
@@ -264,6 +269,7 @@ class PCIDARegressor(nn.Module):
         save_metric="test_mse",
         save_fn="cida-best.pth",
         per_era_metrics=True,
+        skip_eval=False,
     ):
         self.device = next(self.parameters()).device
         metric_hist = []
@@ -272,6 +278,8 @@ class PCIDARegressor(nn.Module):
             if self.verbose:
                 print("Epoch {}/{}".format(epoch + 1, epochs))
             self._fit_epoch(epoch, dataloader)
+            if skip_eval:
+                continue
             metrics = self.eval_on_data(val_dataloader)
             metric_hist.append(metrics)
             if save_metric is None:
