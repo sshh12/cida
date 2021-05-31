@@ -6,7 +6,7 @@ with open("requirements.txt") as f:
 
 setup(
     name="cida-unofficial",
-    version="0.0.0",
+    version="0.1.0",
     description="An unofficial refactor of Continuously Indexed Domain Adaptation.",
     url="https://github.com/sshh12/cida",
     license="MIT",

@@ -14,42 +14,83 @@ import numpy as np
 import tqdm
 
 
+def _make_sequential(
+    *,
+    input_dims,
+    output_dims,
+    hidden_size,
+    dropout,
+    activation_func,
+    depth,
+    use_batchnorm,
+    use_first_batchnorm,
+    use_final_activation
+):
+    assert not use_first_batchnorm or use_batchnorm, "Batchnorm must be enabled"
+    assert depth >= 2, "Model is too shallow"
+    layers = [
+        nn.Linear(input_dims, hidden_size),
+    ]
+    if use_first_batchnorm:
+        layers.append(nn.BatchNorm1d(hidden_size))
+    layers.append(activation_func())
+    for _ in range(depth - 2):
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        layers.append(nn.Linear(hidden_size, hidden_size))
+        if use_batchnorm:
+            layers.append(nn.BatchNorm1d(hidden_size))
+        layers.append(activation_func())
+    if dropout > 0:
+        layers.append(nn.Dropout(dropout))
+    layers.append(nn.Linear(hidden_size, output_dims))
+    if use_final_activation:
+        layers.append(activation_func())
+    return nn.Sequential(*layers)
+
+
 class Encoder(nn.Module):
-    def __init__(self, *, domain_dims, output_dims, input_dims, hidden_size, latent_size, dropout, encode_domain):
+    def __init__(
+        self,
+        *,
+        domain_dims,
+        output_dims,
+        input_dims,
+        encoder_hidden_size,
+        encoder_depth,
+        encoder_dropout,
+        predictor_hidden_size,
+        predictor_depth,
+        predictor_dropout,
+        activation_func,
+        use_batchnorm,
+        latent_size,
+        encode_domain
+    ):
         super(Encoder, self).__init__()
 
-        self.fc_feats = nn.Sequential(
-            nn.Linear(domain_dims + input_dims if encode_domain else input_dims, hidden_size),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.ReLU(True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.ReLU(True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.ReLU(True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, latent_size),
-            nn.ReLU(True),
+        self.fc_feats = _make_sequential(
+            input_dims=domain_dims + input_dims if encode_domain else input_dims,
+            output_dims=latent_size,
+            hidden_size=encoder_hidden_size,
+            dropout=encoder_dropout,
+            activation_func=activation_func,
+            depth=encoder_depth,
+            use_batchnorm=use_batchnorm,
+            use_first_batchnorm=False,
+            use_final_activation=True,
         )
 
-        self.fc_pred = nn.Sequential(
-            nn.Linear(latent_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.ReLU(True),
-            nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.ReLU(True),
-            nn.Linear(hidden_size, output_dims),
+        self.fc_pred = _make_sequential(
+            input_dims=latent_size,
+            output_dims=output_dims,
+            hidden_size=predictor_hidden_size,
+            dropout=predictor_dropout,
+            activation_func=activation_func,
+            depth=predictor_depth,
+            use_batchnorm=use_batchnorm,
+            use_first_batchnorm=False,
+            use_final_activation=False,
         )
 
         self.input_dims = input_dims
@@ -66,23 +107,22 @@ class Encoder(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, *, hidden_size, latent_size, domain_dims):
+    def __init__(self, *, hidden_size, latent_size, dropout, domain_dims, activation_func, depth, use_batchnorm):
         super(Discriminator, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(latent_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.LeakyReLU(0.2),
-            nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.LeakyReLU(0.2),
-            nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1d(hidden_size),
-            nn.LeakyReLU(0.2),
-            nn.Linear(hidden_size, domain_dims * 2),
+        self.fc_dis = _make_sequential(
+            input_dims=latent_size,
+            output_dims=domain_dims * 2,
+            hidden_size=hidden_size,
+            dropout=dropout,
+            activation_func=activation_func,
+            depth=depth,
+            use_batchnorm=use_batchnorm,
+            use_first_batchnorm=use_batchnorm,
+            use_final_activation=False,
         )
 
     def forward(self, x):
-        return self.net(x)
+        return self.fc_dis(x)
 
 
 class PCIDARegressor(nn.Module):
@@ -92,13 +132,21 @@ class PCIDARegressor(nn.Module):
         beta1=0.9,
         gamma=0.5 ** (1 / 50),
         weight_decay=5e-4,
-        dropout=0.2,
         lambda_gan=2.0,
         target_gan_weight=0.5,
         domain_dims=1,
         output_dims=1,
-        encoder_hidden_dims=256,
-        discriminator_hidden_dims=512,
+        encoder_hidden_size=256,
+        encoder_depth=6,
+        encoder_dropout=0.25,
+        predictor_hidden_size=100,
+        predictor_depth=3,
+        predictor_dropout=0.25,
+        discriminator_hidden_size=512,
+        discriminator_depth=4,
+        discriminator_dropout=0.25,
+        activation_func=lambda: nn.LeakyReLU(0.1),
+        use_batchnorm=True,
         latent_size=100,
         input_dims=100,
         loss=F.mse_loss,
@@ -117,9 +165,15 @@ class PCIDARegressor(nn.Module):
             domain_dims=domain_dims,
             output_dims=output_dims,
             input_dims=input_dims,
-            hidden_size=encoder_hidden_dims,
+            encoder_hidden_size=encoder_hidden_size,
+            encoder_depth=encoder_depth,
+            encoder_dropout=encoder_dropout,
+            predictor_hidden_size=predictor_hidden_size,
+            predictor_depth=predictor_depth,
+            predictor_dropout=predictor_dropout,
+            activation_func=activation_func,
+            use_batchnorm=use_batchnorm,
             latent_size=latent_size,
-            dropout=dropout,
             encode_domain=test_domain_known,
         )
         self.optimizer_generator = torch.optim.Adam(
@@ -128,7 +182,13 @@ class PCIDARegressor(nn.Module):
         self.lr_sch_generator = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_generator, gamma=gamma)
 
         self.net_discriminator = Discriminator(
-            hidden_size=discriminator_hidden_dims, latent_size=latent_size, domain_dims=domain_dims
+            hidden_size=discriminator_hidden_size,
+            latent_size=latent_size,
+            domain_dims=domain_dims,
+            activation_func=activation_func,
+            depth=discriminator_depth,
+            use_batchnorm=use_batchnorm,
+            dropout=discriminator_dropout,
         )
         self.optimizer_discriminator = torch.optim.Adam(
             self.net_discriminator.parameters(), lr=lr, betas=(beta1, 0.999), weight_decay=weight_decay
