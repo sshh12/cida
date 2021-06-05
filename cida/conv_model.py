@@ -158,7 +158,6 @@ class ConvPCIDAClassifier(nn.Module):
         self.lambda_gan = lambda_gan
         self.domains_to_labels = domains_to_labels
         self.verbose = verbose
-        self.save_fn = save_fn
 
         init_weights(self.net_encoder)
 
