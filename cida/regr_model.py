@@ -330,6 +330,7 @@ class PCIDARegressor(nn.Module):
         save_fn="cida-best.pth",
         per_era_metrics=True,
         skip_eval=False,
+        end_if_train_is_nan=True,
     ):
         self.device = next(self.parameters()).device
         metric_hist = []
@@ -342,6 +343,12 @@ class PCIDARegressor(nn.Module):
                 continue
             metrics = self.eval_on_data(val_dataloader)
             metric_hist.append(metrics)
+            if self.verbose:
+                _print_metrics(self.metrics, metrics, per_era_metrics)
+            if end_if_train_is_nan and _is_train_nan(metrics):
+                if self.verbose:
+                    print("NaN in train metrics...something went wrong.")
+                return metric_hist
             if save_metric is None:
                 self.save(save_fn)
             elif best_score is None or metrics[save_metric] > best_score:
@@ -349,8 +356,6 @@ class PCIDARegressor(nn.Module):
                 self.save(save_fn)
                 if self.verbose:
                     print("-> New Best!")
-            if self.verbose:
-                _print_metrics(self.metrics, metrics, per_era_metrics)
 
         self.eval()
         return metric_hist
@@ -360,6 +365,13 @@ class PCIDARegressor(nn.Module):
 
     def load(self, fn):
         self.load_state_dict(torch.load(fn))
+
+
+def _is_train_nan(metrics):
+    for k, v in metrics.items():
+        if k.startswith("train_") and v != v:
+            return True
+    return False
 
 
 def _print_metrics(metric_types, metric_values, per_era_metrics):
